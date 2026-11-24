@@ -69,23 +69,7 @@ export const StatsSection: React.FC = () => {
       {/* 4 Animated Counter Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-16 sm:mb-20">
         {STATS_DATA.map((stat, idx) => (
-          <motion.div
-            key={idx}
-            initial={{ opacity: 0, y: 30 }}
-            animate={isInView ? { opacity: 1, y: 0 } : {}}
-            transition={{ duration: 0.6, delay: 0.2 + idx * 0.1 }}
-            className="p-6 sm:p-8 rounded-32 bg-white dark:bg-[#1A1438] border border-[#E8E2F5] dark:border-[#2D235C] shadow-card-soft dark:shadow-card-dark text-center group hover:-translate-y-2 hover:border-[#4B2DB8] dark:hover:border-[#FF6B4A] transition-all duration-300"
-          >
-            <div className="text-4xl sm:text-6xl font-black text-gradient-purple-coral mb-2">
-              <Counter target={stat.numericValue} suffix={stat.suffix || ''} isInView={isInView} />
-            </div>
-            <div className="text-base sm:text-lg font-bold text-[#14102A] dark:text-white mb-1">
-              {stat.label}
-            </div>
-            <div className="text-xs sm:text-sm text-[#5D5878] dark:text-[#A49FC0] font-normal">
-              {stat.subtext}
-            </div>
-          </motion.div>
+          <StatCardItem key={idx} stat={stat} idx={idx} />
         ))}
       </div>
 
@@ -115,35 +99,66 @@ export const StatsSection: React.FC = () => {
   );
 };
 
-// Animated Number Counter Component
-const Counter: React.FC<{ target: number; suffix: string; isInView: boolean }> = ({
+// Stat Card Item with 60% view trigger
+const StatCardItem: React.FC<{ stat: (typeof STATS_DATA)[0]; idx: number }> = ({ stat, idx }) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Starts when card is ~60% in view
+  const isCardInView = useInView(cardRef, { once: true, amount: 0.6 });
+
+  return (
+    <motion.div
+      ref={cardRef}
+      initial={{ opacity: 0, y: 30 }}
+      animate={isCardInView ? { opacity: 1, y: 0 } : {}}
+      transition={{ duration: 0.6, delay: 0.1 + idx * 0.08 }}
+      className="p-6 sm:p-8 rounded-32 bg-white dark:bg-[#1A1438] border border-[#E8E2F5] dark:border-[#2D235C] shadow-card-soft dark:shadow-card-dark text-center group hover:-translate-y-2 hover:border-[#4B2DB8] dark:hover:border-[#FF6B4A] transition-all duration-300"
+    >
+      <div className="text-4xl sm:text-6xl font-black text-gradient-purple-coral mb-2">
+        <Counter target={stat.numericValue} suffix={stat.suffix || ''} trigger={isCardInView} />
+      </div>
+      <div className="text-base sm:text-lg font-bold text-[#14102A] dark:text-white mb-1">
+        {stat.label}
+      </div>
+      <div className="text-xs sm:text-sm text-[#5D5878] dark:text-[#A49FC0] font-normal">
+        {stat.subtext}
+      </div>
+    </motion.div>
+  );
+};
+
+// Smooth Animated Number Counter Component (RAF with ease-out cubic, no end hitch)
+const Counter: React.FC<{ target: number; suffix: string; trigger: boolean }> = ({
   target,
   suffix,
-  isInView,
+  trigger,
 }) => {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    if (!isInView) return;
+    if (!trigger) return;
 
-    let start = 0;
-    const duration = 1800; // ms
-    const stepTime = 30;
-    const steps = duration / stepTime;
-    const increment = target / steps;
+    let animId: number;
+    const duration = 1600; // ms
+    const startTime = performance.now();
 
-    const timer = setInterval(() => {
-      start += increment;
-      if (start >= target) {
-        setCount(target);
-        clearInterval(timer);
+    const update = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(1, elapsed / duration);
+      // Ease out cubic
+      const ease = 1 - Math.pow(1 - progress, 3);
+      const current = Math.round(ease * target);
+      setCount(current);
+
+      if (progress < 1) {
+        animId = requestAnimationFrame(update);
       } else {
-        setCount(Math.floor(start));
+        setCount(target);
       }
-    }, stepTime);
+    };
 
-    return () => clearInterval(timer);
-  }, [isInView, target]);
+    animId = requestAnimationFrame(update);
+    return () => cancelAnimationFrame(animId);
+  }, [trigger, target]);
 
   return (
     <span>

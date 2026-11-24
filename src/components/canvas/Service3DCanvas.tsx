@@ -1,5 +1,5 @@
 import React, { useRef, useState, useMemo, useEffect, Suspense } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import {
   Float,
   Environment,
@@ -26,7 +26,7 @@ export const Service3DCanvas: React.FC<Service3DCanvasProps> = ({ activeIndex })
     const checkMobile = () => {
       const mobile = window.innerWidth < 768;
       setIsMobile(mobile);
-      setDpr(mobile ? 1.2 : 1.6);
+      setDpr(Math.min(window.devicePixelRatio, mobile ? 1.25 : 1.5));
     };
     checkMobile();
     window.addEventListener('resize', checkMobile);
@@ -51,29 +51,37 @@ export const Service3DCanvas: React.FC<Service3DCanvasProps> = ({ activeIndex })
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-full min-h-[340px] sm:min-h-[420px] lg:min-h-[520px] flex items-center justify-center select-none"
+      className="canvas-3d-pan-y relative w-full h-full min-h-[340px] sm:min-h-[420px] lg:min-h-[520px] flex items-center justify-center select-none"
+      style={{ touchAction: 'pan-y' }}
     >
       <Canvas
         camera={{ position: [0, 0, 7.2], fov: 45 }}
         dpr={dpr}
         frameloop={isVisible ? 'always' : 'demand'}
         gl={{
-          antialias: true,
+          antialias: !isMobile,
           alpha: true,
           powerPreference: 'high-performance',
         }}
         className="w-full h-full"
+        style={{ touchAction: 'pan-y' }}
+        onCreated={({ gl }) => {
+          gl.domElement.style.touchAction = 'pan-y';
+        }}
       >
         <PerformanceMonitor
-          onDecline={() => setDpr(isMobile ? 1.0 : 1.2)}
-          onIncline={() => setDpr(isMobile ? 1.25 : 1.7)}
+          onDecline={() => setDpr(isMobile ? 1.0 : 1.15)}
+          onIncline={() => setDpr(isMobile ? 1.2 : 1.5)}
         />
 
         {/* Ambient & Rim Lighting */}
-        <ambientLight intensity={0.7} />
-        <directionalLight position={[4, 5, 5]} intensity={1.3} />
+        <ambientLight intensity={0.8} />
+        <directionalLight position={[4, 5, 5]} intensity={1.4} />
         <directionalLight position={[-4, 2, 3]} color="#FF6B4A" intensity={1.6} />
         <directionalLight position={[3, -3, -4]} color="#7C5CFF" intensity={1.8} />
+        {/* Dedicated Rim Lighting for Silhouette Contrast */}
+        <directionalLight position={[-5, 4, -3]} color="#9D85FF" intensity={2.2} />
+        <pointLight position={[0, 4, -2]} intensity={2.0} color="#FFFFFF" />
 
         {/* Studio Environment Reflections */}
         <Suspense fallback={null}>
@@ -81,12 +89,13 @@ export const Service3DCanvas: React.FC<Service3DCanvasProps> = ({ activeIndex })
         </Suspense>
 
         {/* Subtle Background Particle Dust */}
-        <BackgroundParticles count={isMobile ? 50 : 150} />
+        <BackgroundParticles count={isMobile ? 40 : 120} />
 
-        {/* Central Themed 3D Model with Float and OrbitControls */}
+        {/* Persistent Pre-warmed 3D Models with Float and OrbitControls */}
         <Suspense fallback={null}>
+          <SceneWarmer />
           <Float speed={2.2} rotationIntensity={0.5} floatIntensity={0.7}>
-            <ActiveModelSwitcher activeIndex={activeIndex} />
+            <PersistentModelsContainer activeIndex={activeIndex} />
           </Float>
 
           {/* Soft Ground Contact Shadow */}
@@ -112,13 +121,31 @@ export const Service3DCanvas: React.FC<Service3DCanvasProps> = ({ activeIndex })
         />
       </Canvas>
 
-      {/* "Drag to explore" badge with icon */}
-      <div className="absolute bottom-3 right-3 sm:bottom-6 sm:right-6 px-3.5 py-1.5 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center gap-2 pointer-events-none select-none text-white/90 shadow-md">
+      {/* "Drag to explore" badge with icon - centered below model so it never overlaps */}
+      <div className="absolute bottom-1 sm:bottom-3 left-1/2 -translate-x-1/2 px-3.5 py-1.5 rounded-full bg-black/45 backdrop-blur-md border border-white/15 flex items-center gap-2 pointer-events-none select-none text-white/90 shadow-md z-20">
         <Move3D size={14} className="text-[#FF6B4A] animate-pulse" />
         <span className="text-xs font-semibold tracking-wider uppercase">Drag to explore</span>
       </div>
     </div>
   );
+};
+
+// Shader & Texture Warmer to pre-compile all 15 models during idle time
+const SceneWarmer: React.FC = () => {
+  const { gl, scene, camera } = useThree();
+  useEffect(() => {
+    const warmUp = () => {
+      gl.compile(scene, camera);
+    };
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      const id = (window as any).requestIdleCallback(warmUp, { timeout: 1200 });
+      return () => (window as any).cancelIdleCallback(id);
+    } else {
+      const id = setTimeout(warmUp, 200);
+      return () => clearTimeout(id);
+    }
+  }, [gl, scene, camera]);
+  return null;
 };
 
 // Background Particle Dust
@@ -157,34 +184,47 @@ const BackgroundParticles: React.FC<{ count: number }> = ({ count }) => {
   );
 };
 
-// Model Switcher Component with Smooth Scale-In
-const ActiveModelSwitcher: React.FC<{ activeIndex: number }> = ({ activeIndex }) => {
-  const groupRef = useRef<THREE.Group>(null);
-  const service = SERVICES_DATA[activeIndex] || SERVICES_DATA[0];
+// Persistent Models Container: All 15 models pre-instantiated, toggled via visibility & smooth spring scale
+const PersistentModelsContainer: React.FC<{ activeIndex: number }> = ({ activeIndex }) => {
+  const groupRefs = useRef<(THREE.Group | null)[]>([]);
 
   useFrame((_, delta) => {
-    if (groupRef.current) {
-      // Smooth scale spring interpolation towards 1
-      groupRef.current.scale.x = THREE.MathUtils.damp(groupRef.current.scale.x, 1, 6, delta);
-      groupRef.current.scale.y = THREE.MathUtils.damp(groupRef.current.scale.y, 1, 6, delta);
-      groupRef.current.scale.z = THREE.MathUtils.damp(groupRef.current.scale.z, 1, 6, delta);
-    }
+    groupRefs.current.forEach((grp, idx) => {
+      if (!grp) return;
+      const isActive = idx === activeIndex;
+      if (isActive) {
+        grp.visible = true;
+        grp.scale.x = THREE.MathUtils.damp(grp.scale.x, 1, 9, delta);
+        grp.scale.y = THREE.MathUtils.damp(grp.scale.y, 1, 9, delta);
+        grp.scale.z = THREE.MathUtils.damp(grp.scale.z, 1, 9, delta);
+      } else {
+        grp.scale.x = THREE.MathUtils.damp(grp.scale.x, 0, 14, delta);
+        grp.scale.y = THREE.MathUtils.damp(grp.scale.y, 0, 14, delta);
+        grp.scale.z = THREE.MathUtils.damp(grp.scale.z, 0, 14, delta);
+        if (grp.scale.x < 0.04) {
+          grp.visible = false;
+        }
+      }
+    });
   });
 
-  // Reset scale slightly on model change to create a pop-in feel
-  useEffect(() => {
-    if (groupRef.current) {
-      groupRef.current.scale.set(0.4, 0.4, 0.4);
-    }
-  }, [activeIndex]);
-
-  const primaryCol = useMemo(() => new THREE.Color(service.color), [service.color]);
-  const accentCol = useMemo(() => new THREE.Color(service.accentColor), [service.accentColor]);
-
   return (
-    <group ref={groupRef} scale={[0.4, 0.4, 0.4]}>
-      {renderThemedModel(service.modelType, primaryCol, accentCol)}
-    </group>
+    <>
+      {SERVICES_DATA.map((service, index) => {
+        const primaryCol = new THREE.Color(service.color);
+        const accentCol = new THREE.Color(service.accentColor);
+        return (
+          <group
+            key={service.id}
+            ref={(el) => (groupRefs.current[index] = el)}
+            visible={index === activeIndex}
+            scale={index === activeIndex ? [1, 1, 1] : [0, 0, 0]}
+          >
+            {renderThemedModel(service.modelType, primaryCol, accentCol)}
+          </group>
+        );
+      })}
+    </>
   );
 };
 
@@ -290,22 +330,31 @@ function renderThemedModel(
     case 'appDev':
       return (
         <group>
-          {/* Phone Body */}
-          <RoundedBox args={[1.6, 2.9, 0.18]} radius={0.16} smoothness={4}>
+          {/* Phone Outer Chassis / Luminous Rim */}
+          <RoundedBox args={[1.66, 2.96, 0.19]} radius={0.17} smoothness={4}>
             <meshPhysicalMaterial
-              color="#221A5C"
-              metalness={0.8}
+              color="#5A4A9C"
+              metalness={0.9}
+              roughness={0.12}
+              clearcoat={1}
+            />
+          </RoundedBox>
+          {/* Phone Body */}
+          <RoundedBox args={[1.6, 2.9, 0.18]} radius={0.16} smoothness={4} position={[0, 0, 0.01]}>
+            <meshPhysicalMaterial
+              color="#2F2562"
+              metalness={0.7}
               roughness={0.2}
-              clearcoat={0.8}
+              clearcoat={0.9}
             />
           </RoundedBox>
           {/* Glass Screen */}
-          <RoundedBox args={[1.42, 2.65, 0.05]} radius={0.12} smoothness={3} position={[0, 0, 0.08]}>
+          <RoundedBox args={[1.42, 2.65, 0.05]} radius={0.12} smoothness={3} position={[0, 0, 0.09]}>
             <meshPhysicalMaterial
               color={primary}
-              metalness={0.3}
-              roughness={0.1}
-              transmission={0.4}
+              metalness={0.2}
+              roughness={0.08}
+              transmission={0.35}
               clearcoat={1}
             />
           </RoundedBox>
@@ -317,7 +366,7 @@ function renderThemedModel(
                 args={[0.38, 0.38, 0.06]}
                 radius={0.08}
                 smoothness={2}
-                position={[x, y, 0.13]}
+                position={[x, y, 0.14]}
               >
                 <meshPhysicalMaterial
                   color={yi === 0 ? accent : yi === 1 ? '#FFD23F' : '#FF9BD0'}
@@ -567,14 +616,21 @@ function renderThemedModel(
     case 'videoEditing':
       return (
         <group>
-          {/* Main Slate Body */}
+          {/* Main Slate Body - Studio Slate with visible border */}
           <RoundedBox args={[2.3, 1.6, 0.18]} radius={0.08} smoothness={3}>
-            <meshPhysicalMaterial color="#14102A" metalness={0.4} roughness={0.2} />
+            <meshPhysicalMaterial color="#2B2252" metalness={0.5} roughness={0.25} />
           </RoundedBox>
           {/* Clapper Top Arm (Angled) */}
-          <RoundedBox args={[2.3, 0.35, 0.2]} radius={0.06} smoothness={2} position={[0.1, 0.88, 0.05]} rotation={[0, 0, 0.2]}>
+          <RoundedBox args={[2.3, 0.36, 0.2]} radius={0.06} smoothness={2} position={[0.1, 0.88, 0.05]} rotation={[0, 0, 0.2]}>
             <meshPhysicalMaterial color={primary} metalness={0.7} roughness={0.2} />
           </RoundedBox>
+          {/* Classic Film Clapper White Chevron Stripes */}
+          {[-0.8, -0.4, 0, 0.4, 0.8].map((sx, idx) => (
+            <mesh key={idx} position={[sx + 0.1, 0.88 + sx * 0.04, 0.16]} rotation={[0, 0, 0.6]}>
+              <boxGeometry args={[0.14, 0.32, 0.02]} />
+              <meshBasicMaterial color="#FFFFFF" />
+            </mesh>
+          ))}
           {/* Film Reels */}
           {[-0.65, 0.65].map((rx, idx) => (
             <group key={idx} position={[rx, -0.2, 0.15]}>

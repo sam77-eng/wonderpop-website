@@ -21,7 +21,7 @@ export const Hero: React.FC<HeroProps> = ({ introFinished }) => {
   }, [introFinished]);
 
   return (
-    <section className="relative min-h-[100svh] flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8 pt-20 sm:pt-20 md:pt-24 pb-8 sm:pb-12 overflow-hidden bg-[#FAF7FE] dark:bg-[#0D0924] transition-colors duration-400">
+    <section className="relative min-h-[100dvh] sm:min-h-[100svh] flex flex-col items-center justify-center text-center px-4 sm:px-6 lg:px-8 pt-20 sm:pt-20 md:pt-24 pb-8 sm:pb-12 overflow-hidden bg-[#FAF7FE] dark:bg-[#0D0924] transition-colors duration-400">
       {/* 3D Floating Shapes Background Canvas */}
       <HeroShapesCanvas />
 
